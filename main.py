@@ -1,22 +1,14 @@
-import os
 import sys
 from pathlib import Path
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 import logging
 
-# Критически важные строки для Render
-current_dir = Path(__file__).parent
-sys.path.append(str(current_dir))
+# Добавляем путь к src
+sys.path.append(str(Path(__file__).parent.parent))
 
-try:
-    from config import TOKEN
-    from handlers import router
-except ImportError as e:
-    logging.error(f"Import error: {e}")
-    # Альтернативный вариант импорта
-    from .config import TOKEN
-    from .handlers import router
+from src.config import TOKEN
+from src.handlers import router
 
 logging.basicConfig(level=logging.INFO)
 
