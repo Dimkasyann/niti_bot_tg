@@ -1,7 +1,5 @@
 aiogram==3.4.1
 python-dotenv
-aiofiles
-pytz
-emoji
-APScheduler
 aiohttp
+pytz
+apscheduler
