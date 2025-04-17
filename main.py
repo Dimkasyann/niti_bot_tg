@@ -1,23 +1,3 @@
-├── main.py
-├── requirements.txt
-├── .env
-├── puzzles.json
-├── user_scores.json
-└── src/
-    ├── __init__.py
-    ├── config.py
-    ├── database.py
-    ├── utils.py
-    ├── scheduler.py
-    ├── messages.py
-    └── handlers/
-        ├── __init__.py
-        ├── start.py
-        ├── menu.py
-        ├── hint.py
-        ├── rating.py
-        └── admin.py
-
 # main.py
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
