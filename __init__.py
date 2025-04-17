@@ -7,5 +7,3 @@ router = Router()
 router.include_router(admin_router)
 router.include_router(puzzles_router)
 router.include_router(rating_router)
-
-__all__ = ['router']
