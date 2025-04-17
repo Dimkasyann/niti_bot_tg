@@ -3,5 +3,5 @@ python-dotenv
 aiofiles
 pytz
 emoji
-apschduler
+APScheduler
 aiohttp
