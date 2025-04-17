@@ -5,11 +5,18 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 import logging
 
-# Критически важная строка для Render
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Критически важные строки для Render
+current_dir = Path(__file__).parent
+sys.path.append(str(current_dir))
 
-from config import TOKEN
-from handlers import router
+try:
+    from config import TOKEN
+    from handlers import router
+except ImportError as e:
+    logging.error(f"Import error: {e}")
+    # Альтернативный вариант импорта
+    from .config import TOKEN
+    from .handlers import router
 
 logging.basicConfig(level=logging.INFO)
 
