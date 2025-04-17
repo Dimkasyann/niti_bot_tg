@@ -1,50 +1,29 @@
-# main.py
 import logging
-import json
-import os
 import asyncio
-from aiogram import Bot, Dispatcher, types
-from config import TOKEN, WEBHOOK_URL, PORT, ADMIN_ID
-from menu import main_menu
-from rating import show_rating
-from admin import show_commands
-from hint import check_hint
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.webhook.aiohttp_server import setup_application
+from aiohttp import web
+from config import TOKEN, WEBHOOK_URL, PORT
+from handlers import router
+from scheduler import setup_scheduler
 
 logging.basicConfig(level=logging.INFO)
 
-bot = Bot(token=TOKEN)
-dp = Dispatcher(bot)
+async def on_startup(bot: Bot):
+    await bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+    await setup_scheduler(bot)
 
-# Функция для отправки загадки
-async def send_puzzle():
-    with open('puzzles.json', 'r') as f:
-        puzzles = json.load(f)
-    # Пример для первой загадки
-    puzzle = puzzles.get("2025-04-17")
-    await bot.send_message(chat_id=ADMIN_ID, text=f"Загадка: {puzzle['question']}")
+async def main():
+    bot = Bot(token=TOKEN)
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
+    
+    app = web.Application()
+    app.on_startup.append(lambda _: on_startup(bot))
+    setup_application(app, dp, bot=bot)
+    
+    await web._run_app(app, host="0.0.0.0", port=PORT)
 
-@dp.message_handler(commands=["start"])
-async def start(message: types.Message):
-    await message.answer("Привет, друг! Мы из Молодёжного совета НИТИ. Загадки будут каждый день в 09:00! Жди!\nТвои НИТИкоины: 0", reply_markup=main_menu)
-
-@dp.message_handler(commands=["rating"])
-async def rating(message: types.Message):
-    await show_rating(message)
-
-@dp.message_handler(commands=["commands"])
-async def commands(message: types.Message):
-    if message.from_user.id == int(ADMIN_ID):
-        await show_commands(message)
-
-@dp.message_handler(commands=["hint"])
-async def hint(message: types.Message):
-    await check_hint(message)
-
-# Запуск бота с использованием asyncio
-if __name__ == '__main__':
-    # Запуск отправки загадок (каждый день, например, с использованием задач по расписанию)
-    loop = asyncio.get_event_loop()
-    loop.create_task(send_puzzle())  # Здесь можно поставить планировщик для отправки заданий
-
-    from aiogram import executor
-    executor.start_polling(dp, skip_updates=True)
+if __name__ == "__main__":
+    asyncio.run(main())
