@@ -1,13 +1,8 @@
-import sys
-from pathlib import Path
+import logging
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
-from bot.config import TOKEN, WEBHOOK_URL, PORT
-from bot.handlers import router
-import logging
-
-# Добавляем путь к проекту
-sys.path.append(str(Path(__file__).parent.parent))
+from config import TOKEN
+from handlers import router
 
 logging.basicConfig(level=logging.INFO)
 
