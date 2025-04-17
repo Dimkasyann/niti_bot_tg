@@ -1,11 +1,12 @@
+import os
 import sys
 from pathlib import Path
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 import logging
 
-# Добавляем путь к проекту
-sys.path.append(str(Path(__file__).parent))
+# Критически важная строка для Render
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from config import TOKEN
 from handlers import router
