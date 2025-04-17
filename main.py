@@ -2,8 +2,8 @@
 import logging
 import json
 import os
+import asyncio
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
 from config import TOKEN, WEBHOOK_URL, PORT, ADMIN_ID
 from menu import main_menu
 from rating import show_rating
@@ -40,5 +40,11 @@ async def commands(message: types.Message):
 async def hint(message: types.Message):
     await check_hint(message)
 
+# Запуск бота с использованием asyncio
 if __name__ == '__main__':
-    executor.start_polling(dp)
+    # Запуск отправки загадок (каждый день, например, с использованием задач по расписанию)
+    loop = asyncio.get_event_loop()
+    loop.create_task(send_puzzle())  # Здесь можно поставить планировщик для отправки заданий
+
+    from aiogram import executor
+    executor.start_polling(dp, skip_updates=True)
