@@ -1,11 +1,10 @@
-# QuizMCBot / MCNiti_QuizBot
+# MCNiti_QuizBot
 
-Telegram-бот для НИТИ с ежедневными загадками и логическим юмором 🧠
+🤖 Бот с ежедневными загадками для Молодёжного совета НИТИ
 
-## 🔧 Установка
+## 🚀 Установка
 
+1. Клонировать репозиторий:
 ```bash
-git clone https://github.com/yourname/QuizMCBot.git
-cd QuizMCBot
-pip install -r requirements.txt
-cp .env.example .env
+git clone https://github.com/yourname/MCNiti_QuizBot.git
+cd MCNiti_QuizBot
