@@ -1,220 +1,145 @@
-# ✅ src/config.py
+├── main.py
+├── requirements.txt
+├── .env
+├── puzzles.json
+├── user_scores.json
+└── src/
+    ├── __init__.py
+    ├── config.py
+    ├── database.py
+    ├── utils.py
+    ├── scheduler.py
+    ├── messages.py
+    └── handlers/
+        ├── __init__.py
+        ├── start.py
+        ├── menu.py
+        ├── hint.py
+        ├── rating.py
+        └── admin.py
 
+# main.py
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import BotCommand
+from aiogram.enums import ParseMode
+import asyncio, logging, os
+from src.config import TOKEN, WEBHOOK_URL, PORT
+from src.handlers import register_all_handlers
+from src.scheduler import start_scheduler
+
+logging.basicConfig(level=logging.INFO)
+
+async def main():
+    bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
+    dp = Dispatcher(storage=MemoryStorage())
+
+    register_all_handlers(dp)
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Запустить бота"),
+    ])
+    
+    asyncio.create_task(start_scheduler(bot))
+
+    from aiogram.webhook.aiohttp_server import setup_application
+    from aiohttp import web
+
+    app = web.Application()
+    dp.startup.register(lambda _: logging.info("Бот запущен."))
+    dp.shutdown.register(lambda _: logging.info("Бот остановлен."))
+
+    setup_application(app, dp, bot=bot)
+    app.on_shutdown.append(lambda _: bot.session.close())
+
+    web.run_app(app, host="0.0.0.0", port=int(PORT))
+
+if __name__ == '__main__':
+    asyncio.run(main())
+
+# src/config.py
 import os
 from dotenv import load_dotenv
-
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+PORT = os.getenv("PORT", 10000)
 
-# ✅ src/middlewares.py
+# src/messages.py
+WELCOME = "<b>Привет, друг!</b> 👋\n\nМы — Молодёжный совет НИТИ 👨‍🔬\nКаждое утро в 09:00 мы будем отправлять тебе крутую загадку 🧠\n\nБудь первым, кто её отгадает, и забирай 10 НИТИкоинов! 🪙\n\nТы готов? Жми /start или кнопки ниже ⬇️"
+MOTIVATION = [
+    "Ты можешь больше, чем думаешь! 💪",
+    "Каждая загадка — шаг к успеху 🚀",
+    "МС НИТИ — самые смекалистые! 🧠"
+]
 
-def setup_middlewares(dp):
-    pass  # Пока пусто, добавим позже по мере необходимости
+# src/utils.py
+import string
 
-# ✅ src/keyboard.py
+def clean_text(text):
+    return ''.join(c.lower() for c in text.strip() if c not in string.punctuation and c != ' ')
 
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from src.config import ADMIN_ID
+def answers_match(user_answer, correct_answer):
+    return clean_text(user_answer) == clean_text(correct_answer)
 
-def main_menu_keyboard(user_id):
-    buttons = [
-        [InlineKeyboardButton(text="🧠 Рейтинг", callback_data="rating")],
-        [InlineKeyboardButton(text="💰 Мои НИТИкоины", callback_data="coins")],
-        [InlineKeyboardButton(text="🧩 Подсказка", callback_data="hint")],
-        [InlineKeyboardButton(text="🍑 Пошлая пятница", callback_data="friday")],
-    ]
-    if user_id == ADMIN_ID:
-        buttons.append([InlineKeyboardButton(text="⚙️ Команды", callback_data="admin_commands")])
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+# src/database.py
+import json, os
+PUZZLES_FILE = "puzzles.json"
+SCORES_FILE = "user_scores.json"
 
-# ✅ src/state.py
+def load_puzzles():
+    if not os.path.exists(PUZZLES_FILE): return {}
+    with open(PUZZLES_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
 
-from aiogram.fsm.state import State, StatesGroup
+def save_puzzles(data):
+    with open(PUZZLES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-class AddPuzzle(StatesGroup):
-    waiting_for_date = State()
-    waiting_for_question = State()
-    waiting_for_answer = State()
-    waiting_for_hint = State()
+def load_scores():
+    if not os.path.exists(SCORES_FILE): return {}
+    with open(SCORES_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
 
-# ✅ src/utils.py
+def save_scores(data):
+    with open(SCORES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-import json
+# src/scheduler.py
+import asyncio
 from datetime import datetime, timedelta
 from aiogram import Bot
-from aiogram.types import Message
+from src.database import load_puzzles
+from src.handlers.menu import send_daily_puzzle, notify_puzzle_coming
 
-from src.keyboard import main_menu_keyboard
-from src.config import ADMIN_ID
-
-PUZZLE_FILE = "puzzles.json"
-
-async def send_daily_puzzle(bot: Bot, reminder=False):
-    today = datetime.now().strftime("%Y-%m-%d")
-    with open(PUZZLE_FILE, "r", encoding="utf-8") as f:
-        puzzles = json.load(f)
-
-    for p in puzzles:
-        if p["date"] == today:
-            question = p["question"]
-            hint = p.get("hint", "Подумай хорошенько!")
-            break
-    else:
-        return
-
-    users_file = "users.json"
-    try:
-        with open(users_file, "r", encoding="utf-8") as f:
-            users = json.load(f)
-    except FileNotFoundError:
-        users = []
-
-    for uid in users:
-        try:
-            if reminder:
-                await bot.send_message(uid, "⏰ Через 10 минут прилетит новая загадка! Подготовь мозги 🧠")
-            else:
-                await bot.send_message(uid, f"🧩 Загадка дня!\n\n<b>{question}</b>", reply_markup=main_menu_keyboard(uid))
-        except:
-            continue
-
-async def clean_text(text):
-    return ''.join(e for e in text.lower().strip() if e.isalnum())
-
-async def get_puzzle_for_today():
-    today = datetime.now().strftime("%Y-%m-%d")
-    with open(PUZZLE_FILE, "r", encoding="utf-8") as f:
-        puzzles = json.load(f)
-    for p in puzzles:
-        if p["date"] == today:
-            return p
-    return None
-
-# ✅ src/handlers.py
-
-from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
-from aiogram.filters import CommandStart
-from datetime import datetime, timedelta
-import json
-import asyncio
-
-from src.keyboard import main_menu_keyboard
-from src.utils import clean_text, get_puzzle_for_today
-from src.config import ADMIN_ID
-
-router = Router()
-
-user_data = {}
-user_coins = {}
-hints_shown = {}
-answered_users = set()
-
-USERS_FILE = "users.json"
-
-def setup_handlers(dp, bot):
-    dp.include_router(router)
-
-@router.message(CommandStart())
-async def start_handler(message: Message):
-    user_id = message.from_user.id
-    username = message.from_user.full_name
-
-    try:
-        with open(USERS_FILE, "r", encoding="utf-8") as f:
-            users = json.load(f)
-    except FileNotFoundError:
-        users = []
-
-    if user_id not in users:
-        users.append(user_id)
-        with open(USERS_FILE, "w", encoding="utf-8") as f:
-            json.dump(users, f)
-
-    await message.answer(
-        f"Привет, друг! 👋\n\nМы — Молодёжный совет НИТИ и рады видеть тебя!\nКаждый день в 09:00 тебя ждёт свежая загадка. Загадай как можно больше — заработай НИТИкоинов 💰 и попади в ТОП!",
-        reply_markup=main_menu_keyboard(user_id)
-    )
-
-    # Отправим загадку сразу при старте
-    puzzle = await get_puzzle_for_today()
-    if puzzle:
-        await message.answer(f"🧩 Загадка дня!\n\n<b>{puzzle['question']}</b>")
-    else:
-        await message.answer("🫤 Сегодня загадки нет. Но ты не унывай — приходи завтра!")
-
-@router.callback_query(F.data == "coins")
-async def show_coins(callback: CallbackQuery):
-    user_id = str(callback.from_user.id)
-    coins = user_coins.get(user_id, 0)
-    await callback.message.edit_text(f"💰 У тебя {coins} НИТИкоинов!")
-
-@router.callback_query(F.data == "hint")
-async def show_hint(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    now = datetime.now()
-    if user_id not in hints_shown:
-        hints_shown[user_id] = now
-        await callback.message.answer("🕒 Подсказка будет доступна через 30 минут! Подожди и подумай ещё!")
-    elif now - hints_shown[user_id] >= timedelta(minutes=30):
-        puzzle = await get_puzzle_for_today()
-        await callback.message.answer(f"🔍 Подсказка: {puzzle['hint']}")
-    else:
-        remaining = 30 - int((now - hints_shown[user_id]).seconds / 60)
-        await callback.message.answer(f"⏳ Подсказка будет доступна через {remaining} мин. Потерпи!")
-
-@router.message()
-async def handle_answer(message: Message):
-    user_id = str(message.from_user.id)
-    if user_id in answered_users:
-        await message.answer("📭 Ты уже отгадал сегодняшнюю загадку! Жди следующую 🕘")
-        return
-
-    puzzle = await get_puzzle_for_today()
-    if not puzzle:
-        await message.answer("Сегодня загадки нет. Возвращайся завтра!")
-        return
-
-    answer = await clean_text(message.text)
-    correct = await clean_text(puzzle["answer"])
-
-    if answer == correct:
-        # Подсчёт НИТИкоинов
-        position = len(answered_users)
-        points = max(1, 10 - position)
-        user_coins[user_id] = user_coins.get(user_id, 0) + points
-        answered_users.add(user_id)
-
+async def start_scheduler(bot: Bot):
+    while True:
         now = datetime.now()
-        next_riddle_time = datetime.combine(now.date() + timedelta(days=1), datetime.strptime("09:00", "%H:%M").time())
-        remaining = next_riddle_time - now
-        hours, minutes = divmod(remaining.seconds // 60, 60)
+        next_8_50 = now.replace(hour=8, minute=50, second=0, microsecond=0)
+        next_9_00 = now.replace(hour=9, minute=0, second=0, microsecond=0)
 
-        await message.answer(
-            f"🎉 Молодец, ты угадал! Ты получил {points} НИТИкоинов.\nСледующая загадка будет через {hours}ч {minutes}мин. 🧠")
-    else:
-        await message.answer("❌ Нет, но ты на верном пути! Пробуй ещё раз!")
+        if now >= next_9_00:
+            next_9_00 += timedelta(days=1)
+        if now >= next_8_50:
+            next_8_50 += timedelta(days=1)
 
-@router.callback_query(F.data == "rating")
-async def show_rating(callback: CallbackQuery):
-    top = sorted(user_coins.items(), key=lambda x: x[1], reverse=True)[:10]
-    rating = "🏆 Топ-10 мозгов НИТИ:\n\n"
-    for i, (uid, coins) in enumerate(top, 1):
-        rating += f"{i}. <code>{uid}</code> — {coins} НИТИкоинов\n"
-    await callback.message.edit_text(rating)
+        await asyncio.sleep((next_8_50 - now).total_seconds())
+        await notify_puzzle_coming(bot)
+        await asyncio.sleep(600)  # 10 мин
+        await send_daily_puzzle(bot)
 
-@router.callback_query(F.data == "admin_commands")
-async def show_admin_commands(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.message.answer("⛔ Только администратор может видеть этот список.")
-        return
+# src/handlers/__init__.py
+from aiogram import Dispatcher
+from .start import start_router
+from .menu import menu_router
+from .hint import hint_router
+from .rating import rating_router
+from .admin import admin_router
 
-    await callback.message.edit_text(
-        "⚙️ Команды администратора:\n\n"
-        "/addpuzzle — Добавить новую загадку\n"
-        "/restart — Перезапустить бота\n"
-        "/stats — Расширенная статистика"
-    )
+def register_all_handlers(dp: Dispatcher):
+    dp.include_router(start_router)
+    dp.include_router(menu_router)
+    dp.include_router(hint_router)
+    dp.include_router(rating_router)
+    dp.include_router(admin_router)
