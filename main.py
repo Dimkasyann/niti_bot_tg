@@ -1,239 +1,220 @@
-import asyncio
-import logging
-import json
-import string
-from datetime import datetime, timedelta
+# ✅ src/config.py
+
 import os
-import pytz
-from aiogram import Bot, Dispatcher, Router, F, types
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.types import BotCommand, BotCommandScopeDefault
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.enums import ParseMode
-from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiohttp import web
 from dotenv import load_dotenv
 
-# === Load environment variables === #
 load_dotenv()
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
-PORT = int(os.getenv("PORT", 3000))
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-BASE_WEBHOOK_URL = os.getenv("RENDER_EXTERNAL_URL")
 
-# === Init bot and dispatcher === #
-session = AiohttpSession()
-bot = Bot(token=BOT_TOKEN, session=session, parse_mode=ParseMode.HTML)
-dp = Dispatcher(storage=MemoryStorage())
-router = Router()
-dp.include_router(router)
+# ✅ src/middlewares.py
 
-# === Time zone === #
-moscow_tz = pytz.timezone("Europe/Moscow")
+def setup_middlewares(dp):
+    pass  # Пока пусто, добавим позже по мере необходимости
 
-# === Puzzle file === #
-PUZZLE_FILE = "puzzles.json"
+# ✅ src/keyboard.py
 
-# === State Machine for Adding Puzzle === #
-class PuzzleForm(StatesGroup):
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from src.config import ADMIN_ID
+
+def main_menu_keyboard(user_id):
+    buttons = [
+        [InlineKeyboardButton(text="🧠 Рейтинг", callback_data="rating")],
+        [InlineKeyboardButton(text="💰 Мои НИТИкоины", callback_data="coins")],
+        [InlineKeyboardButton(text="🧩 Подсказка", callback_data="hint")],
+        [InlineKeyboardButton(text="🍑 Пошлая пятница", callback_data="friday")],
+    ]
+    if user_id == ADMIN_ID:
+        buttons.append([InlineKeyboardButton(text="⚙️ Команды", callback_data="admin_commands")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# ✅ src/state.py
+
+from aiogram.fsm.state import State, StatesGroup
+
+class AddPuzzle(StatesGroup):
     waiting_for_date = State()
     waiting_for_question = State()
     waiting_for_answer = State()
     waiting_for_hint = State()
-    waiting_for_friday = State()
 
-# === Utilities === #
-def load_puzzles():
-    if not os.path.exists(PUZZLE_FILE):
-        return []
+# ✅ src/utils.py
+
+import json
+from datetime import datetime, timedelta
+from aiogram import Bot
+from aiogram.types import Message
+
+from src.keyboard import main_menu_keyboard
+from src.config import ADMIN_ID
+
+PUZZLE_FILE = "puzzles.json"
+
+async def send_daily_puzzle(bot: Bot, reminder=False):
+    today = datetime.now().strftime("%Y-%m-%d")
     with open(PUZZLE_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+        puzzles = json.load(f)
 
-def save_puzzles(puzzles):
-    with open(PUZZLE_FILE, "w", encoding="utf-8") as f:
-        json.dump(puzzles, f, ensure_ascii=False, indent=2)
-
-def normalize_answer(text):
-    text = text.lower().translate(str.maketrans('', '', string.punctuation)).strip()
-    return "".join(text.split())
-
-def get_today_puzzle():
-    today = datetime.now(moscow_tz).strftime("%Y-%m-%d")
-    puzzles = load_puzzles()
     for p in puzzles:
-        if p['date'] == today:
+        if p["date"] == today:
+            question = p["question"]
+            hint = p.get("hint", "Подумай хорошенько!")
+            break
+    else:
+        return
+
+    users_file = "users.json"
+    try:
+        with open(users_file, "r", encoding="utf-8") as f:
+            users = json.load(f)
+    except FileNotFoundError:
+        users = []
+
+    for uid in users:
+        try:
+            if reminder:
+                await bot.send_message(uid, "⏰ Через 10 минут прилетит новая загадка! Подготовь мозги 🧠")
+            else:
+                await bot.send_message(uid, f"🧩 Загадка дня!\n\n<b>{question}</b>", reply_markup=main_menu_keyboard(uid))
+        except:
+            continue
+
+async def clean_text(text):
+    return ''.join(e for e in text.lower().strip() if e.isalnum())
+
+async def get_puzzle_for_today():
+    today = datetime.now().strftime("%Y-%m-%d")
+    with open(PUZZLE_FILE, "r", encoding="utf-8") as f:
+        puzzles = json.load(f)
+    for p in puzzles:
+        if p["date"] == today:
             return p
     return None
 
+# ✅ src/handlers.py
+
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery
+from aiogram.filters import CommandStart
+from datetime import datetime, timedelta
+import json
+import asyncio
+
+from src.keyboard import main_menu_keyboard
+from src.utils import clean_text, get_puzzle_for_today
+from src.config import ADMIN_ID
+
+router = Router()
+
+user_data = {}
 user_coins = {}
-user_answers = {}
+hints_shown = {}
+answered_users = set()
 
-# === Keyboards === #
-def main_keyboard():
-    kb = [[
-        InlineKeyboardButton(text="💰 Мои НИТИкоины", callback_data="my_coins"),
-        InlineKeyboardButton(text="📊 Рейтинг", callback_data="rating")
-    ], [
-        InlineKeyboardButton(text="🧠 Подсказка", callback_data="hint"),
-        InlineKeyboardButton(text="😏 Пошлая пятница", callback_data="friday")
-    ]]
-    if ADMIN_ID:
-        kb.append([InlineKeyboardButton(text="🎩 Команды", callback_data="admin")])
-    return InlineKeyboardMarkup(inline_keyboard=kb)
+USERS_FILE = "users.json"
 
-# === Scheduler Tasks === #
-async def send_daily_puzzle():
-    puzzle = get_today_puzzle()
+def setup_handlers(dp, bot):
+    dp.include_router(router)
+
+@router.message(CommandStart())
+async def start_handler(message: Message):
+    user_id = message.from_user.id
+    username = message.from_user.full_name
+
+    try:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            users = json.load(f)
+    except FileNotFoundError:
+        users = []
+
+    if user_id not in users:
+        users.append(user_id)
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(users, f)
+
+    await message.answer(
+        f"Привет, друг! 👋\n\nМы — Молодёжный совет НИТИ и рады видеть тебя!\nКаждый день в 09:00 тебя ждёт свежая загадка. Загадай как можно больше — заработай НИТИкоинов 💰 и попади в ТОП!",
+        reply_markup=main_menu_keyboard(user_id)
+    )
+
+    # Отправим загадку сразу при старте
+    puzzle = await get_puzzle_for_today()
     if puzzle:
-        text = f"🧩 <b>Загадка дня ({puzzle['date']})</b>\n{puzzle['question']}"
-        await bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=main_keyboard())
+        await message.answer(f"🧩 Загадка дня!\n\n<b>{puzzle['question']}</b>")
+    else:
+        await message.answer("🫤 Сегодня загадки нет. Но ты не унывай — приходи завтра!")
 
-async def send_reminder():
-    await bot.send_message(chat_id=ADMIN_ID, text="⏰ Через 10 минут выйдет новая загадка!")
-
-async def scheduler():
-    while True:
-        now = datetime.now(moscow_tz)
-        if now.strftime("%H:%M") == "08:50":
-            await send_reminder()
-        elif now.strftime("%H:%M") == "09:00":
-            await send_daily_puzzle()
-        await asyncio.sleep(60)
-
-# === Command Handlers === #
-@router.message(F.text == "/start")
-async def cmd_start(message: Message):
-    await message.answer("Добро пожаловать в QuizMCBot!", reply_markup=main_keyboard())
-
-@router.callback_query(F.data == "my_coins")
+@router.callback_query(F.data == "coins")
 async def show_coins(callback: CallbackQuery):
-    coins = user_coins.get(callback.from_user.id, 0)
-    await callback.message.answer(f"💰 У тебя {coins} НИТИкоинов!")
+    user_id = str(callback.from_user.id)
+    coins = user_coins.get(user_id, 0)
+    await callback.message.edit_text(f"💰 У тебя {coins} НИТИкоинов!")
+
+@router.callback_query(F.data == "hint")
+async def show_hint(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    now = datetime.now()
+    if user_id not in hints_shown:
+        hints_shown[user_id] = now
+        await callback.message.answer("🕒 Подсказка будет доступна через 30 минут! Подожди и подумай ещё!")
+    elif now - hints_shown[user_id] >= timedelta(minutes=30):
+        puzzle = await get_puzzle_for_today()
+        await callback.message.answer(f"🔍 Подсказка: {puzzle['hint']}")
+    else:
+        remaining = 30 - int((now - hints_shown[user_id]).seconds / 60)
+        await callback.message.answer(f"⏳ Подсказка будет доступна через {remaining} мин. Потерпи!")
+
+@router.message()
+async def handle_answer(message: Message):
+    user_id = str(message.from_user.id)
+    if user_id in answered_users:
+        await message.answer("📭 Ты уже отгадал сегодняшнюю загадку! Жди следующую 🕘")
+        return
+
+    puzzle = await get_puzzle_for_today()
+    if not puzzle:
+        await message.answer("Сегодня загадки нет. Возвращайся завтра!")
+        return
+
+    answer = await clean_text(message.text)
+    correct = await clean_text(puzzle["answer"])
+
+    if answer == correct:
+        # Подсчёт НИТИкоинов
+        position = len(answered_users)
+        points = max(1, 10 - position)
+        user_coins[user_id] = user_coins.get(user_id, 0) + points
+        answered_users.add(user_id)
+
+        now = datetime.now()
+        next_riddle_time = datetime.combine(now.date() + timedelta(days=1), datetime.strptime("09:00", "%H:%M").time())
+        remaining = next_riddle_time - now
+        hours, minutes = divmod(remaining.seconds // 60, 60)
+
+        await message.answer(
+            f"🎉 Молодец, ты угадал! Ты получил {points} НИТИкоинов.\nСледующая загадка будет через {hours}ч {minutes}мин. 🧠")
+    else:
+        await message.answer("❌ Нет, но ты на верном пути! Пробуй ещё раз!")
 
 @router.callback_query(F.data == "rating")
 async def show_rating(callback: CallbackQuery):
     top = sorted(user_coins.items(), key=lambda x: x[1], reverse=True)[:10]
-    text = "📊 <b>ТОП-10</b>\n"
-    for i, (uid, score) in enumerate(top, 1):
-        text += f"{i}. <a href='tg://user?id={uid}'>Пользователь</a> — {score} 🪙\n"
-    await callback.message.answer(text)
+    rating = "🏆 Топ-10 мозгов НИТИ:\n\n"
+    for i, (uid, coins) in enumerate(top, 1):
+        rating += f"{i}. <code>{uid}</code> — {coins} НИТИкоинов\n"
+    await callback.message.edit_text(rating)
 
-@router.callback_query(F.data == "hint")
-async def show_hint(callback: CallbackQuery):
-    puzzle = get_today_puzzle()
-    if not puzzle:
-        await callback.message.answer("Сегодня загадка ещё не загружена.")
-        return
-    await callback.message.answer(f"🧠 Подсказка: {puzzle['hints'][0]}")
-
-@router.callback_query(F.data == "friday")
-async def show_friday(callback: CallbackQuery):
-    puzzle = get_today_puzzle()
-    if puzzle and puzzle.get("is_friday"):
-        await callback.message.answer("😏 Сегодня Пошлая пятница! Бонус +3 НИТИкоина!")
-    else:
-        await callback.message.answer("Сегодня обычный день 🙃")
-
-@router.callback_query(F.data == "admin")
-async def admin_panel(callback: CallbackQuery):
+@router.callback_query(F.data == "admin_commands")
+async def show_admin_commands(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
+        await callback.message.answer("⛔ Только администратор может видеть этот список.")
         return
-    text = "🎩 Команды админа:\n/addpuzzle — добавить загадку\n/restart — перезапуск бота"
-    await callback.message.answer(text)
 
-# === Answer Handler === #
-@router.message()
-async def handle_answer(message: Message):
-    puzzle = get_today_puzzle()
-    if not puzzle:
-        return
-    if message.from_user.id in user_answers.get(puzzle['date'], []):
-        return await message.answer("⛔ Ты уже отвечал сегодня!")
-    if normalize_answer(message.text) == normalize_answer(puzzle['answer']):
-        pos = len(user_answers.setdefault(puzzle['date'], [])) + 1
-        reward = max(11 - pos, 1) + (3 if puzzle.get("is_friday") else 0)
-        user_coins[message.from_user.id] = user_coins.get(message.from_user.id, 0) + reward
-        user_answers[puzzle['date']].append(message.from_user.id)
-        await message.answer(f"🎉 Правильно! Ты получаешь {reward} НИТИкоинов!")
-    else:
-        await message.answer("❌ Неправильно, попробуй ещё раз!")
-
-# === Admin: Add Puzzle === #
-@router.message(F.text == "/addpuzzle")
-async def start_add_puzzle(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
-    await message.answer("🗓 Введи дату загадки в формате ГГГГ-ММ-ДД")
-    await state.set_state(PuzzleForm.waiting_for_date)
-
-@router.message(PuzzleForm.waiting_for_date)
-async def puzzle_date_entered(message: Message, state: FSMContext):
-    await state.update_data(date=message.text)
-    await message.answer("🧠 Введи текст загадки")
-    await state.set_state(PuzzleForm.waiting_for_question)
-
-@router.message(PuzzleForm.waiting_for_question)
-async def puzzle_question_entered(message: Message, state: FSMContext):
-    await state.update_data(question=message.text)
-    await message.answer("✅ Введи правильный ответ")
-    await state.set_state(PuzzleForm.waiting_for_answer)
-
-@router.message(PuzzleForm.waiting_for_answer)
-async def puzzle_answer_entered(message: Message, state: FSMContext):
-    await state.update_data(answer=message.text)
-    await message.answer("💡 Введи подсказку")
-    await state.set_state(PuzzleForm.waiting_for_hint)
-
-@router.message(PuzzleForm.waiting_for_hint)
-async def puzzle_hint_entered(message: Message, state: FSMContext):
-    await state.update_data(hint=message.text)
-    await message.answer("Сегодня пятница и загадка пошлая? (да/нет)")
-    await state.set_state(PuzzleForm.waiting_for_friday)
-
-@router.message(PuzzleForm.waiting_for_friday)
-async def puzzle_friday_entered(message: Message, state: FSMContext):
-    data = await state.get_data()
-    puzzles = load_puzzles()
-    puzzles.append({
-        "date": data['date'],
-        "question": data['question'],
-        "answer": data['answer'],
-        "hints": [data['hint']],
-        "is_friday": message.text.lower() == "да"
-    })
-    save_puzzles(puzzles)
-    await message.answer("✅ Загадка успешно добавлена!")
-    await state.clear()
-
-# === Admin Restart === #
-@router.message(F.text == "/restart")
-async def restart_bot(message: Message):
-    if message.from_user.id == ADMIN_ID:
-        await message.answer("🔄 Перезапуск... (условный)")
-
-# === Launch === #
-async def on_startup(bot: Bot):
-    await bot.set_my_commands([
-        BotCommand(command="start", description="Запуск бота"),
-        BotCommand(command="addpuzzle", description="Добавить загадку (только админ)"),
-        BotCommand(command="restart", description="Перезапуск бота (только админ)")
-    ], scope=BotCommandScopeDefault())
-
-app = web.Application()
-app['bot'] = bot
-SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
-setup_application(app, dp, bot=bot)
-
-async def main():
-    logging.basicConfig(level=logging.INFO)
-    await bot.set_webhook(f"{BASE_WEBHOOK_URL}{WEBHOOK_PATH}")
-    asyncio.create_task(scheduler())
-    return app
-
-if __name__ == '__main__':
-    web.run_app(main(), port=PORT)
+    await callback.message.edit_text(
+        "⚙️ Команды администратора:\n\n"
+        "/addpuzzle — Добавить новую загадку\n"
+        "/restart — Перезапустить бота\n"
+        "/stats — Расширенная статистика"
+    )
