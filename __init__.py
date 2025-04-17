@@ -1,9 +1,11 @@
-import os
-from dotenv import load_dotenv
+from aiogram import Router
+from .admin import admin_router
+from .puzzles import puzzles_router
+from .rating import rating_router
 
-load_dotenv()
+router = Router()
+router.include_router(admin_router)
+router.include_router(puzzles_router)
+router.include_router(rating_router)
 
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PORT = int(os.getenv("PORT", 10000))
+__all__ = ['router']
