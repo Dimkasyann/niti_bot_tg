@@ -1,29 +1,26 @@
-import logging
-import asyncio
+import sys
+from pathlib import Path
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.webhook.aiohttp_server import setup_application
-from aiohttp import web
-from config import TOKEN, WEBHOOK_URL, PORT
-from handlers import router
-from scheduler import setup_scheduler
+from bot.config import TOKEN, WEBHOOK_URL, PORT
+from bot.handlers import router
+import logging
+
+# Добавляем путь к проекту
+sys.path.append(str(Path(__file__).parent.parent))
 
 logging.basicConfig(level=logging.INFO)
-
-async def on_startup(bot: Bot):
-    await bot.set_webhook(f"{WEBHOOK_URL}/webhook")
-    await setup_scheduler(bot)
 
 async def main():
     bot = Bot(token=TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
     
-    app = web.Application()
-    app.on_startup.append(lambda _: on_startup(bot))
-    setup_application(app, dp, bot=bot)
-    
-    await web._run_app(app, host="0.0.0.0", port=PORT)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
 
-if __name__ == "__main__":
+if __name__ == '__main__':
+    import asyncio
     asyncio.run(main())
